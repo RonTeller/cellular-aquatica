@@ -16,14 +16,14 @@ from simulation import Simulation
 from renderer import Renderer
 
 # Window configuration
-WINDOW_WIDTH = 1024
-WINDOW_HEIGHT = 768
-WINDOW_TITLE = "2D Terrain Simulator"
+WINDOW_WIDTH = 1280
+WINDOW_HEIGHT = 800
+WINDOW_TITLE = "Cellular Aquatica"
 
 # Simulation resolution (pixels per cell - higher = fewer cells = faster)
 CELL_SIZE = 4  # Each cell is 4x4 pixels
-SIM_WIDTH = WINDOW_WIDTH // CELL_SIZE   # 256 cells
-SIM_HEIGHT = WINDOW_HEIGHT // CELL_SIZE  # 192 cells
+SIM_WIDTH = WINDOW_WIDTH // CELL_SIZE   # 320 cells
+SIM_HEIGHT = WINDOW_HEIGHT // CELL_SIZE  # 200 cells
 
 # Simulation settings
 TARGET_FPS = 60
@@ -100,8 +100,31 @@ def main():
                     simulation.drop_metal_object()
 
             elif event.type == pygame.MOUSEBUTTONDOWN:
-                mouse_held = True
-                mouse_button = event.button
+                # Check if click is on settings panel
+                mx, my = pygame.mouse.get_pos()
+                key, delta = renderer.handle_click((mx, my))
+
+                if key is not None:
+                    # Handle settings change
+                    if key == 'spawn':
+                        simulation.fish_spawn_chance = max(0, min(0.1,
+                            simulation.fish_spawn_chance + delta))
+                    elif key == 'death':
+                        simulation.fish_death_chance = max(0, min(0.01,
+                            simulation.fish_death_chance + delta))
+                    elif key == 'rain':
+                        rain_intensity = max(0, min(MAX_RAIN_INTENSITY,
+                            int(rain_intensity + delta)))
+                    elif key == 'evap':
+                        simulation.evaporation_rate = max(0, min(0.1,
+                            simulation.evaporation_rate + delta))
+                    elif key == 'speed':
+                        sim_steps = max(MIN_SIM_STEPS, min(MAX_SIM_STEPS,
+                            int(sim_steps + delta)))
+                else:
+                    # Normal mouse interaction
+                    mouse_held = True
+                    mouse_button = event.button
 
             elif event.type == pygame.MOUSEBUTTONUP:
                 mouse_held = False
@@ -110,17 +133,19 @@ def main():
         # Handle mouse interaction (convert screen coords to sim coords)
         if mouse_held:
             mx, my = pygame.mouse.get_pos()
-            sim_x, sim_y = mx // CELL_SIZE, my // CELL_SIZE
-            if 0 <= sim_x < SIM_WIDTH and 0 <= sim_y < SIM_HEIGHT:
-                if mouse_button == 1:  # Left click - add water
-                    simulation.add_material(sim_x, sim_y, Material.WATER, radius=2)
-                elif mouse_button == 3:  # Right click - remove material
-                    simulation.remove_material(sim_x, sim_y, radius=3)
+            # Don't interact with simulation if clicking on settings panel area
+            if mx < WINDOW_WIDTH - 180:
+                sim_x, sim_y = mx // CELL_SIZE, my // CELL_SIZE
+                if 0 <= sim_x < SIM_WIDTH and 0 <= sim_y < SIM_HEIGHT:
+                    if mouse_button == 1:  # Left click - add water
+                        simulation.add_material(sim_x, sim_y, Material.WATER, radius=2)
+                    elif mouse_button == 3:  # Right click - remove material
+                        simulation.remove_material(sim_x, sim_y, radius=3)
 
         # Update simulation (multiple steps per frame for faster physics)
         if not paused:
-            # Add rain once per frame
-            if rain_intensity > 0:
+            # Add rain only during rain season
+            if rain_intensity > 0 and simulation.season == 'rain':
                 simulation.add_rain(rain_intensity)
 
             # Run multiple simulation steps for faster gravity
@@ -132,7 +157,15 @@ def main():
 
         # Calculate FPS
         fps = clock.get_fps()
-        renderer.render_ui(fps, rain_intensity, paused, sim_steps)
+        renderer.render_ui(
+            fps, rain_intensity, paused, sim_steps,
+            fish_count=len(simulation.fish),
+            spawn_chance=simulation.fish_spawn_chance,
+            death_chance=simulation.fish_death_chance,
+            evap_rate=simulation.evaporation_rate,
+            season=simulation.season,
+            water_ratio=simulation.get_water_ratio()
+        )
 
         # Update display
         pygame.display.flip()

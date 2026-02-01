@@ -4,6 +4,132 @@ import numpy as np
 from materials import Material
 
 
+class Fish:
+    """A fish that swims in water with natural movement."""
+
+    BASE_SPEED = 0.6  # Base swimming speed
+
+    def __init__(self, x: float, y: float):
+        self.x = float(x)
+        self.y = float(y)
+
+        # Swimming parameters
+        self.direction = np.random.choice([-1, 1])  # -1 = left, 1 = right
+        self.randomize_speed()  # Set initial random speed
+        self.vx = self.direction * self.swim_speed
+        self.vy = 0.0
+
+        # Oscillation for natural swimming motion
+        self.swim_phase = np.random.uniform(0, 2 * np.pi)
+        self.swim_frequency = np.random.uniform(0.08, 0.15)
+        self.vertical_tendency = np.random.uniform(-0.02, 0.02)  # Slight up/down preference
+
+        # Size as numeric value (affects shape and collision outcomes)
+        # Starting sizes: small=1.0, medium=2.0, large=3.0
+        size_choice = np.random.choice(['small', 'small', 'medium', 'large'])
+        if size_choice == 'small':
+            self.size_value = 1.0
+        elif size_choice == 'medium':
+            self.size_value = 2.0
+        else:
+            self.size_value = 3.0
+
+        self.alive = True
+        self.age = 0
+        self.max_age = np.random.randint(800, 2000)  # Lifespan in frames
+        self.turn_cooldown = 0  # Prevent rapid direction changes
+
+    @property
+    def size(self) -> str:
+        """Get size category based on size_value."""
+        if self.size_value < 1.5:
+            return 'small'
+        elif self.size_value < 2.5:
+            return 'medium'
+        else:
+            return 'large'
+
+    def grow(self, amount: float = 0.3) -> None:
+        """Grow the fish by a small amount."""
+        self.size_value += amount
+        # Cap max size
+        self.size_value = min(self.size_value, 5.0)
+
+    def randomize_speed(self) -> None:
+        """Randomize swim speed between 0.5x and 2x base speed."""
+        multiplier = np.random.uniform(0.5, 2.0)
+        self.swim_speed = Fish.BASE_SPEED * multiplier
+
+    def get_shape(self) -> list:
+        """Get fish shape as list of (dx, dy) offsets from head position."""
+        d = self.direction
+
+        if self.size == 'small':
+            # Small fish: 3 cells, flat horizontal
+            #  <oo
+            return [
+                (0, 0),           # Head
+                (-d, 0),          # Body
+                (-d * 2, 0),      # Tail
+            ]
+        elif self.size == 'medium':
+            # Medium fish: 5 cells
+            #  <ooo<
+            return [
+                (0, 0),           # Head
+                (-d, 0),          # Body 1
+                (-d * 2, 0),      # Body 2
+                (-d * 3, 0),      # Body 3
+                (-d * 4, 0),      # Tail
+            ]
+        else:
+            # Large fish: 7 cells with fins
+            #    o
+            #  <ooooo
+            #    o
+            return [
+                (0, 0),           # Head
+                (-d, 0),          # Body 1
+                (-d * 2, 0),      # Body 2
+                (-d * 3, 0),      # Body 3
+                (-d * 4, 0),      # Body 4
+                (-d * 2, -1),     # Dorsal fin
+                (-d * 2, 1),      # Ventral fin
+            ]
+
+    def get_cells(self) -> list:
+        """Get world coordinates of all fish cells."""
+        ix, iy = int(round(self.x)), int(round(self.y))
+        return [(ix + dx, iy + dy) for dx, dy in self.get_shape()]
+
+    def update_swimming(self) -> None:
+        """Update swimming motion - natural side-to-side movement."""
+        # Update swim phase for oscillation
+        self.swim_phase += self.swim_frequency
+
+        # Horizontal movement - maintain swim direction with slight speed variation
+        speed_wobble = np.sin(self.swim_phase * 2) * 0.1
+        self.vx = self.direction * (self.swim_speed + speed_wobble)
+
+        # Vertical oscillation - gentle up/down wave motion
+        self.vy = np.sin(self.swim_phase) * 0.15 + self.vertical_tendency
+
+        # Occasionally change vertical tendency
+        if np.random.random() < 0.01:
+            self.vertical_tendency = np.random.uniform(-0.03, 0.03)
+
+        # Decrease turn cooldown
+        if self.turn_cooldown > 0:
+            self.turn_cooldown -= 1
+
+    def turn_around(self) -> None:
+        """Make the fish turn and swim the other direction."""
+        if self.turn_cooldown <= 0:
+            self.direction *= -1
+            self.vx = self.direction * self.swim_speed
+            self.turn_cooldown = 30  # Prevent turning again for 30 frames
+
+
 class MetalObject:
     """A rigid metal object with physics properties."""
 
@@ -74,6 +200,19 @@ class Simulation:
         # Rigid metal objects with physics
         self.metal_objects = []
 
+        # Fish (life simulation)
+        self.fish = []
+        self.fish_spawn_chance = 0.02  # Base chance to spawn (multiplied by water ratio)
+        self.fish_death_chance = 0.0005  # Base chance of death per frame (increases with size)
+        self.min_water_for_life = 50  # Minimum water cells needed for fish to spawn
+
+        # Seasons system
+        self.season = 'rain'  # 'rain' or 'dry'
+        self.rain_threshold = 0.50  # Switch to dry season when water reaches 50%
+        self.dry_threshold = 0.20  # Switch to rain season when water drops to 20%
+        self.evaporation_rate = 0.01  # Chance per surface water cell to evaporate per frame
+        self.total_cells = self.width * self.height
+
         # Physics constants
         self.gravity = 0.5
         self.bounce_damping = 0.5  # Energy retained after bounce
@@ -87,6 +226,15 @@ class Simulation:
 
         # Update rigid metal objects first
         self._update_metal_objects()
+
+        # Update fish
+        self._update_fish()
+
+        # Try to spawn new fish
+        self._try_spawn_fish()
+
+        # Update seasons and evaporation
+        self._update_seasons()
 
         # Pre-generate random directions for this frame
         rand_dirs = np.random.randint(0, 2, (self.height, self.width)) * 2 - 1
@@ -313,6 +461,238 @@ class Simulation:
         # Remove objects that fell off screen
         for i in reversed(objects_to_remove):
             self.metal_objects.pop(i)
+
+    def _update_fish(self) -> None:
+        """Update all fish - movement, lifecycle, collisions, and death."""
+        fish_to_remove = set()
+
+        # First pass: clear all fish from grid
+        for fish in self.fish:
+            for fx, fy in fish.get_cells():
+                if 0 <= fx < self.width and 0 <= fy < self.height:
+                    if self.grid[fy, fx] == Material.FISH:
+                        self.grid[fy, fx] = Material.WATER
+
+        # Second pass: update each fish
+        for i, fish in enumerate(self.fish):
+            if i in fish_to_remove:
+                continue
+
+            # Age the fish
+            fish.age += 1
+            if fish.age > fish.max_age:
+                fish.alive = False
+
+            # Size-based death chance (bigger fish more likely to die)
+            death_chance = self.fish_death_chance * fish.size_value
+            if np.random.random() < death_chance:
+                fish.alive = False
+
+            if not fish.alive:
+                fish_to_remove.add(i)
+                continue
+
+            # Update swimming motion (no gravity - fish swim freely)
+            fish.update_swimming()
+
+            # Calculate new position
+            new_x = fish.x + fish.vx
+            new_y = fish.y + fish.vy
+
+            # Check if new position is valid
+            can_move = True
+            old_x, old_y = fish.x, fish.y
+            fish.x, fish.y = new_x, new_y
+
+            for fx, fy in fish.get_cells():
+                if not (0 <= fx < self.width and 0 <= fy < self.height):
+                    can_move = False
+                    break
+                cell = self.grid[fy, fx]
+                if cell not in (Material.WATER, Material.FISH):
+                    can_move = False
+                    break
+
+            if can_move:
+                # Movement successful
+                pass
+            else:
+                # Can't move - revert position and turn around
+                fish.x, fish.y = old_x, old_y
+                fish.turn_around()
+                fish.randomize_speed()  # New speed after hitting boundary
+                fish.vertical_tendency = -fish.vertical_tendency
+
+                # Try to find a valid position by nudging the fish
+                # This prevents fish from getting stuck at boundaries
+                nudged = False
+                for nudge_y in [0, -1, 1, -2, 2]:
+                    for nudge_x in [0, -fish.direction, -fish.direction * 2]:
+                        test_x = old_x + nudge_x
+                        test_y = old_y + nudge_y
+                        fish.x, fish.y = test_x, test_y
+
+                        valid = True
+                        for fx, fy in fish.get_cells():
+                            if not (0 <= fx < self.width and 0 <= fy < self.height):
+                                valid = False
+                                break
+                            if self.grid[fy, fx] not in (Material.WATER, Material.FISH):
+                                valid = False
+                                break
+
+                        if valid:
+                            nudged = True
+                            break
+                    if nudged:
+                        break
+
+                if not nudged:
+                    # Still stuck - revert to old position
+                    fish.x, fish.y = old_x, old_y
+
+        # Third pass: check for collisions between fish
+        for i, fish1 in enumerate(self.fish):
+            if i in fish_to_remove or not fish1.alive:
+                continue
+
+            cells1 = set(fish1.get_cells())
+
+            for j, fish2 in enumerate(self.fish):
+                if j <= i or j in fish_to_remove or not fish2.alive:
+                    continue
+
+                cells2 = set(fish2.get_cells())
+
+                # Check for collision (overlapping cells)
+                if cells1 & cells2:
+                    # Collision! Bigger fish eats smaller
+                    if fish1.size_value > fish2.size_value:
+                        # Fish1 eats fish2
+                        fish1.grow(0.2 + fish2.size_value * 0.1)
+                        fish1.randomize_speed()  # New speed after eating
+                        fish2.alive = False
+                        fish_to_remove.add(j)
+                    elif fish2.size_value > fish1.size_value:
+                        # Fish2 eats fish1
+                        fish2.grow(0.2 + fish1.size_value * 0.1)
+                        fish2.randomize_speed()  # New speed after eating
+                        fish1.alive = False
+                        fish_to_remove.add(i)
+                        break  # Fish1 is dead, stop checking its collisions
+                    else:
+                        # Same size - 50/50 chance
+                        if np.random.random() < 0.5:
+                            fish1.grow(0.2 + fish2.size_value * 0.1)
+                            fish1.randomize_speed()  # New speed after eating
+                            fish2.alive = False
+                            fish_to_remove.add(j)
+                        else:
+                            fish2.grow(0.2 + fish1.size_value * 0.1)
+                            fish2.randomize_speed()  # New speed after eating
+                            fish1.alive = False
+                            fish_to_remove.add(i)
+                            break
+
+        # Fourth pass: draw surviving fish
+        for i, fish in enumerate(self.fish):
+            if i in fish_to_remove or not fish.alive:
+                continue
+
+            for fx, fy in fish.get_cells():
+                if 0 <= fx < self.width and 0 <= fy < self.height:
+                    if self.grid[fy, fx] == Material.WATER:
+                        self.grid[fy, fx] = Material.FISH
+
+        # Remove dead fish
+        for i in sorted(fish_to_remove, reverse=True):
+            if i < len(self.fish):
+                self.fish.pop(i)
+
+    def _try_spawn_fish(self) -> None:
+        """Occasionally spawn fish in water pools. Spawn rate scales with water volume."""
+        # Count water cells
+        water_count = np.sum(self.grid == Material.WATER)
+
+        if water_count < self.min_water_for_life:
+            return
+
+        # Limit fish population
+        max_fish = max(1, water_count // 80)  # 1 fish per 80 water cells max
+        if len(self.fish) >= max_fish:
+            return
+
+        # Spawn chance scales with water ratio (more water = more spawning)
+        water_ratio = water_count / self.total_cells
+        spawn_chance = self.fish_spawn_chance * water_ratio * 10  # Scale factor
+        if np.random.random() > spawn_chance:
+            return
+
+        # Find a random water cell to spawn in
+        water_positions = np.argwhere(self.grid == Material.WATER)
+        if len(water_positions) == 0:
+            return
+
+        # Pick a random water cell
+        idx = np.random.randint(len(water_positions))
+        spawn_y, spawn_x = water_positions[idx]
+
+        # Check if there's enough water around for the fish
+        water_nearby = 0
+        for dy in range(-3, 4):
+            for dx in range(-5, 6):
+                nx, ny = spawn_x + dx, spawn_y + dy
+                if 0 <= nx < self.width and 0 <= ny < self.height:
+                    if self.grid[ny, nx] == Material.WATER:
+                        water_nearby += 1
+
+        if water_nearby >= 8:  # Need decent pool size
+            # Create fish and verify all its cells would be in water
+            new_fish = Fish(spawn_x, spawn_y)
+            can_spawn = True
+            for fx, fy in new_fish.get_cells():
+                if not (0 <= fx < self.width and 0 <= fy < self.height):
+                    can_spawn = False
+                    break
+                if self.grid[fy, fx] != Material.WATER:
+                    can_spawn = False
+                    break
+
+            if can_spawn:
+                self.fish.append(new_fish)
+
+    def _update_seasons(self) -> None:
+        """Update season state and handle evaporation during dry season."""
+        water_count = np.sum(self.grid == Material.WATER)
+        water_ratio = water_count / self.total_cells
+
+        # Check for season transitions
+        if self.season == 'rain' and water_ratio >= self.rain_threshold:
+            self.season = 'dry'
+        elif self.season == 'dry' and water_ratio <= self.dry_threshold:
+            self.season = 'rain'
+
+        # Evaporation during dry season
+        if self.season == 'dry' and self.evaporation_rate > 0:
+            self._evaporate_surface_water()
+
+    def _evaporate_surface_water(self) -> None:
+        """Evaporate water from the surface (top-most water cells in each column)."""
+        # Find surface water cells (water with air above)
+        for x in range(self.width):
+            for y in range(self.height):
+                if self.grid[y, x] == Material.WATER:
+                    # Check if this is surface water (air above or at top of screen)
+                    is_surface = (y == 0) or (self.grid[y - 1, x] == Material.AIR)
+                    if is_surface:
+                        # Random chance to evaporate
+                        if np.random.random() < self.evaporation_rate:
+                            self.grid[y, x] = Material.AIR
+                        break  # Only check topmost water in each column
+
+    def get_water_ratio(self) -> float:
+        """Get current water level as a ratio of total cells."""
+        return np.sum(self.grid == Material.WATER) / self.total_cells
 
     def drop_metal_object(self) -> None:
         """Drop a random metallic shape from the sky."""
