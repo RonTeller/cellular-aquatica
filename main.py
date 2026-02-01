@@ -1,0 +1,147 @@
+"""
+2D Terrain Simulator - Main Entry Point
+
+A cellular automata-based terrain simulator with water physics,
+procedural terrain generation, and rain simulation.
+Inspired by Noita's visual style.
+"""
+
+import sys
+import numpy as np
+import pygame
+
+from materials import Material
+from terrain import generate_terrain
+from simulation import Simulation
+from renderer import Renderer
+
+# Window configuration
+WINDOW_WIDTH = 1024
+WINDOW_HEIGHT = 768
+WINDOW_TITLE = "2D Terrain Simulator"
+
+# Simulation resolution (pixels per cell - higher = fewer cells = faster)
+CELL_SIZE = 4  # Each cell is 4x4 pixels
+SIM_WIDTH = WINDOW_WIDTH // CELL_SIZE   # 256 cells
+SIM_HEIGHT = WINDOW_HEIGHT // CELL_SIZE  # 192 cells
+
+# Simulation settings
+TARGET_FPS = 60
+DEFAULT_RAIN_INTENSITY = 1
+MAX_RAIN_INTENSITY = 50
+DEFAULT_SIM_STEPS = 1  # Simulation steps per frame
+MAX_SIM_STEPS = 20
+MIN_SIM_STEPS = 1
+
+def main():
+    """Main entry point for the terrain simulator."""
+    # Initialize Pygame
+    pygame.init()
+    pygame.display.set_caption(WINDOW_TITLE)
+
+    screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
+    clock = pygame.time.Clock()
+
+    # Generate initial terrain at simulation resolution
+    print(f"Generating terrain ({SIM_WIDTH}x{SIM_HEIGHT} cells, {CELL_SIZE}x scale)...")
+    grid = generate_terrain(SIM_WIDTH, SIM_HEIGHT)
+
+    # Initialize simulation and renderer
+    simulation = Simulation(grid)
+    renderer = Renderer(screen, CELL_SIZE)
+
+    # State variables
+    running = True
+    paused = False
+    rain_intensity = DEFAULT_RAIN_INTENSITY
+    sim_steps = DEFAULT_SIM_STEPS
+    mouse_held = False
+    mouse_button = None
+
+    print("Simulation started. Press SPACE to pause, R to regenerate terrain.")
+    print(f"Simulation speed: {sim_steps}x (use [ and ] to adjust)")
+
+    # Main game loop
+    while running:
+        # Event handling
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
+                    running = False
+
+                elif event.key == pygame.K_SPACE:
+                    paused = not paused
+
+                elif event.key == pygame.K_r:
+                    # Regenerate terrain with new seed
+                    seed = np.random.randint(0, 100000)
+                    grid = generate_terrain(SIM_WIDTH, SIM_HEIGHT, seed)
+                    simulation = Simulation(grid)
+                    print(f"Terrain regenerated (seed: {seed})")
+
+                elif event.key == pygame.K_UP:
+                    rain_intensity = min(rain_intensity + 1, MAX_RAIN_INTENSITY)
+
+                elif event.key == pygame.K_DOWN:
+                    rain_intensity = max(rain_intensity - 1, 0)
+
+                elif event.key == pygame.K_RIGHTBRACKET:
+                    sim_steps = min(sim_steps + 1, MAX_SIM_STEPS)
+                    print(f"Simulation speed: {sim_steps}x")
+
+                elif event.key == pygame.K_LEFTBRACKET:
+                    sim_steps = max(sim_steps - 1, MIN_SIM_STEPS)
+                    print(f"Simulation speed: {sim_steps}x")
+
+                elif event.key == pygame.K_m:
+                    simulation.drop_metal_object()
+
+            elif event.type == pygame.MOUSEBUTTONDOWN:
+                mouse_held = True
+                mouse_button = event.button
+
+            elif event.type == pygame.MOUSEBUTTONUP:
+                mouse_held = False
+                mouse_button = None
+
+        # Handle mouse interaction (convert screen coords to sim coords)
+        if mouse_held:
+            mx, my = pygame.mouse.get_pos()
+            sim_x, sim_y = mx // CELL_SIZE, my // CELL_SIZE
+            if 0 <= sim_x < SIM_WIDTH and 0 <= sim_y < SIM_HEIGHT:
+                if mouse_button == 1:  # Left click - add water
+                    simulation.add_material(sim_x, sim_y, Material.WATER, radius=2)
+                elif mouse_button == 3:  # Right click - remove material
+                    simulation.remove_material(sim_x, sim_y, radius=3)
+
+        # Update simulation (multiple steps per frame for faster physics)
+        if not paused:
+            # Add rain once per frame
+            if rain_intensity > 0:
+                simulation.add_rain(rain_intensity)
+
+            # Run multiple simulation steps for faster gravity
+            for _ in range(sim_steps):
+                simulation.update()
+
+        # Render
+        renderer.render(simulation.grid)
+
+        # Calculate FPS
+        fps = clock.get_fps()
+        renderer.render_ui(fps, rain_intensity, paused, sim_steps)
+
+        # Update display
+        pygame.display.flip()
+
+        # Cap frame rate
+        clock.tick(TARGET_FPS)
+
+    pygame.quit()
+    sys.exit(0)
+
+if __name__ == "__main__":
+    main()
