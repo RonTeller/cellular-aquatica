@@ -180,43 +180,36 @@ class Renderer:
         # Base colors from lookup
         colors = COLOR_LOOKUP[grid].astype(np.int16)
 
-        # Apply static variation to solid materials (stone, dirt, metal, fish)
-        for material in [Material.STONE, Material.DIRT, Material.METAL, Material.FISH]:
-            mask = grid == material
-            var_amount = MATERIAL_VARIATION[material]
-            scaled_var = (self.noise_map * var_amount // 128)
-            for c in range(3):
-                colors[:, :, c] = np.where(
-                    mask,
-                    np.clip(colors[:, :, c] + scaled_var, 0, 255),
-                    colors[:, :, c]
-                )
+        # Pre-compute variation lookup (material index -> variation amount)
+        var_lookup = np.zeros(256, dtype=np.int16)
+        for mat in [Material.STONE, Material.DIRT, Material.METAL, Material.FISH, Material.SKELETON]:
+            var_lookup[mat] = MATERIAL_VARIATION[mat]
+        var_lookup[Material.AIR] = 3  # Slight air variation
 
-        # Animated water shimmer
+        # Get variation amount for each cell based on material type
+        var_amounts = var_lookup[grid]
+
+        # Apply variation in one vectorized operation
+        scaled_var = (self.noise_map * var_amounts // 128).astype(np.int16)
+        colors[:, :, 0] = np.clip(colors[:, :, 0] + scaled_var, 0, 255)
+        colors[:, :, 1] = np.clip(colors[:, :, 1] + scaled_var, 0, 255)
+        colors[:, :, 2] = np.clip(colors[:, :, 2] + scaled_var, 0, 255)
+
+        # Animated water shimmer (optimized - only compute for water cells)
         self.water_time += 0.15
         water_mask = grid == Material.WATER
-        if np.any(water_mask):
+        water_count = np.sum(water_mask)
+        if water_count > 0:
             # Create shimmer using sin wave + noise
             y_coords, x_coords = np.where(water_mask)
-            if len(y_coords) > 0:
-                shimmer = np.sin(x_coords * 0.1 + y_coords * 0.05 + self.water_time) * 20
-                shimmer += self.noise_map[water_mask] * 0.1
+            shimmer = np.sin(x_coords * 0.1 + y_coords * 0.05 + self.water_time) * 20
+            shimmer += self.noise_map[water_mask] * 0.1
 
-                # Apply shimmer to blue and green channels
-                water_colors = colors[water_mask]
-                water_colors[:, 1] = np.clip(water_colors[:, 1] + shimmer * 0.5, 0, 255)
-                water_colors[:, 2] = np.clip(water_colors[:, 2] + shimmer, 0, 255)
-                colors[water_mask] = water_colors
-
-        # Add slight ambient variation to air
-        air_mask = grid == Material.AIR
-        air_var = self.noise_map * 3 // 128
-        for c in range(3):
-            colors[:, :, c] = np.where(
-                air_mask,
-                np.clip(colors[:, :, c] + air_var, 0, 255),
-                colors[:, :, c]
-            )
+            # Apply shimmer to blue and green channels
+            water_colors = colors[water_mask]
+            water_colors[:, 1] = np.clip(water_colors[:, 1] + shimmer * 0.5, 0, 255)
+            water_colors[:, 2] = np.clip(water_colors[:, 2] + shimmer, 0, 255)
+            colors[water_mask] = water_colors
 
         # Convert to uint8 and transpose for pygame (expects width, height, 3)
         color_array = np.transpose(colors.astype(np.uint8), (1, 0, 2))

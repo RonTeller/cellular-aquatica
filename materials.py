@@ -11,6 +11,7 @@ class Material(IntEnum):
     WATER = 3
     METAL = 4
     FISH = 5  # Fish body (rendered on top of water)
+    SKELETON = 6  # Dead fish skeleton (sinks and decays)
 
 # Base colors for each material (RGB tuples) - Noita-inspired darker palette
 MATERIAL_COLORS = {
@@ -20,6 +21,7 @@ MATERIAL_COLORS = {
     Material.WATER: (30, 90, 180),      # Deep blue water
     Material.METAL: (160, 165, 180),    # Silvery metal
     Material.FISH: (255, 140, 0),       # Orange fish
+    Material.SKELETON: (140, 140, 130), # Grey bone color
 }
 
 # Color variation ranges for each material (adds visual noise)
@@ -30,6 +32,7 @@ MATERIAL_VARIATION = {
     Material.WATER: 25,
     Material.METAL: 20,
     Material.FISH: 30,
+    Material.SKELETON: 15,
 }
 
 def create_color_lookup() -> np.ndarray:
