@@ -186,6 +186,32 @@ class Fish:
         """Get fish shape as simple (dx, dy) list for collision detection."""
         return [(dx, dy) for dx, dy, _ in self.get_shape()]
 
+    def get_center_of_mass_offset(self) -> float:
+        """Get the x-offset of center of mass from head position."""
+        shape = self.get_shape()
+        if not shape:
+            return 0.0
+        total_x = sum(dx for dx, dy, _ in shape)
+        return total_x / len(shape)
+
+    def turn_with_pivot(self) -> None:
+        """Turn the fish around, pivoting around center of mass."""
+        # Calculate center of mass position before turning
+        old_com_offset = self.get_center_of_mass_offset()
+        old_com_x = self.x + old_com_offset
+
+        # Flip direction
+        self.direction *= -1
+        self.vx = -self.vx
+        self._cached_cells = None
+        self._cached_shape = None  # Shape changes with direction
+
+        # Calculate new center of mass offset after turning
+        new_com_offset = self.get_center_of_mass_offset()
+
+        # Adjust position so center of mass stays in same world position
+        self.x = old_com_x - new_com_offset
+
     def get_cells(self) -> list:
         """Get world coordinates of all fish cells (cached for performance)."""
         ix, iy = int(round(self.x)), int(round(self.y))
@@ -227,9 +253,9 @@ class Fish:
             self.turn_cooldown -= 1
 
     def turn_around(self) -> None:
-        """Make the fish turn and swim the other direction."""
+        """Make the fish turn and swim the other direction, pivoting around center of mass."""
         if self.turn_cooldown <= 0:
-            self.direction *= -1
+            self.turn_with_pivot()
             self.vx = self.direction * self.swim_speed
             self.turn_cooldown = 30  # Prevent turning again for 30 frames
 
@@ -702,25 +728,20 @@ class Simulation:
             fish.update_swimming()
 
             # Pre-check: if fish is near screen edge, force turn away from edge
-            # When turning, the body flips to the other side, so we need extra margin
-            # and must also move the fish to accommodate the body flip
-            fish_length = len(fish.get_shape())
-            body_length = fish_length - 1  # Body extends behind head
+            # Use center-of-mass pivot for natural turning animation
+            com_offset = fish.get_center_of_mass_offset()
+            com_x = fish.x + com_offset
 
-            if fish.direction == -1 and fish.x < body_length + 3:
-                # Near left edge, swimming left - force turn right
-                # After turning, body will extend LEFT, so move fish right first
-                fish.direction = 1
+            # Check if center of mass is too close to edges
+            margin = 5
+            if fish.direction == -1 and com_x < margin:
+                # Near left edge, swimming left - turn right with pivot
+                fish.turn_with_pivot()
                 fish.vx = abs(fish.vx)
-                fish.x = max(fish.x, body_length + 3)  # Move away from edge
-                fish._cached_cells = None
-            elif fish.direction == 1 and fish.x > self.width - body_length - 3:
-                # Near right edge, swimming right - force turn left
-                # After turning, body will extend RIGHT, so move fish left first
-                fish.direction = -1
+            elif fish.direction == 1 and com_x > self.width - margin:
+                # Near right edge, swimming right - turn left with pivot
+                fish.turn_with_pivot()
                 fish.vx = -abs(fish.vx)
-                fish.x = min(fish.x, self.width - body_length - 3)  # Move away from edge
-                fish._cached_cells = None
 
             # Calculate new position
             new_x = fish.x + fish.vx
@@ -744,70 +765,60 @@ class Simulation:
                 # Movement successful
                 pass
             else:
-                # Can't move - revert position
+                # Can't move - revert position and turn with center-of-mass pivot
                 fish.x, fish.y = old_x, old_y
-
-                # Force turn away from the obstacle
-                fish.direction *= -1
-                fish.vx = -fish.vx
-                fish._cached_cells = None  # Clear cache since direction changed
+                fish.turn_with_pivot()
                 fish.randomize_speed()
                 fish.vertical_tendency = -fish.vertical_tendency
 
-                # After turning, body extends the other way - account for this
-                body_length = len(fish.get_shape()) - 1
-
-                # Try to find a valid position moving AWAY from where we came
-                # Prioritize positions that move in the new direction
-                found_valid = False
-                search_offsets_x = [
-                    fish.direction * body_length,  # Move enough for body
-                    fish.direction * (body_length + 1),
-                    fish.direction * (body_length + 2),
-                    fish.direction * 2,
-                    fish.direction * 3,
-                    fish.direction,
-                    0
-                ]
-
-                for nudge_y in [0, -1, 1, -2, 2, -3, 3]:
-                    for nudge_x in search_offsets_x:
-                        test_x = old_x + nudge_x
-                        test_y = old_y + nudge_y
-                        fish.x, fish.y = test_x, test_y
-                        fish._cached_cells = None
-
-                        # Check if this position is valid
-                        valid = True
-                        for fx, fy in fish.get_cells():
-                            if not (0 <= fx < width and 0 <= fy < height):
-                                valid = False
-                                break
-                            cell = grid[fy, fx]
-                            if cell != MAT_WATER and cell != MAT_FISH:
-                                valid = False
-                                break
-
-                        if valid:
-                            found_valid = True
-                            break
-                    if found_valid:
+                # Check if new position after pivot turn is valid
+                found_valid = True
+                for fx, fy in fish.get_cells():
+                    if not (0 <= fx < width and 0 <= fy < height):
+                        found_valid = False
+                        break
+                    cell = grid[fy, fx]
+                    if cell != MAT_WATER and cell != MAT_FISH:
+                        found_valid = False
                         break
 
                 if not found_valid:
-                    # Still stuck - try larger nudges toward center of screen
+                    # Try small nudges to find valid position
+                    for nudge_y in [0, -1, 1, -2, 2, -3, 3]:
+                        for nudge_x in [0, fish.direction, fish.direction * 2, -fish.direction]:
+                            test_x = fish.x + nudge_x
+                            test_y = fish.y + nudge_y
+                            fish.x, fish.y = test_x, test_y
+                            fish._cached_cells = None
+
+                            valid = True
+                            for fx, fy in fish.get_cells():
+                                if not (0 <= fx < width and 0 <= fy < height):
+                                    valid = False
+                                    break
+                                cell = grid[fy, fx]
+                                if cell != MAT_WATER and cell != MAT_FISH:
+                                    valid = False
+                                    break
+
+                            if valid:
+                                found_valid = True
+                                break
+                        if found_valid:
+                            break
+
+                if not found_valid:
+                    # Still stuck - try moving toward center of screen
                     center_dir = 1 if old_x < self.width / 2 else -1
                     for dist in range(1, 10):
                         for nudge_y in [0, -1, 1, -2, 2]:
-                            nudge_x = center_dir * dist
-                            test_x = old_x + nudge_x
+                            test_x = old_x + center_dir * dist
                             test_y = old_y + nudge_y
                             fish.x, fish.y = test_x, test_y
-
-                            # Set direction toward center
                             fish.direction = center_dir
                             fish.vx = center_dir * fish.swim_speed
                             fish._cached_cells = None
+                            fish._cached_shape = None
 
                             valid = True
                             for fx, fy in fish.get_cells():
@@ -932,15 +943,11 @@ class Simulation:
                                 fish_to_remove.add(i)
                                 break
                     else:
-                        # No eating - both fish turn around and change speed
-                        fish1.direction *= -1
-                        fish1.vx = -fish1.vx
-                        fish1._cached_cells = None
+                        # No eating - both fish turn around with pivot and change speed
+                        fish1.turn_with_pivot()
                         fish1.randomize_speed()
 
-                        fish2.direction *= -1
-                        fish2.vx = -fish2.vx
-                        fish2._cached_cells = None
+                        fish2.turn_with_pivot()
                         fish2.randomize_speed()
 
         # Fourth pass: draw surviving fish and track in fish_grid with colors
