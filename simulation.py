@@ -106,11 +106,12 @@ class Fish:
     def get_cells(self) -> list:
         """Get world coordinates of all fish cells (cached for performance)."""
         ix, iy = int(round(self.x)), int(round(self.y))
-        cache_key = (ix, iy, self.direction)
 
-        if self._cached_cells is None or (ix, iy, self.direction) != (self._cached_pos[0] if self._cached_pos else None,
-                                                                       self._cached_pos[1] if self._cached_pos else None,
-                                                                       self._cached_dir):
+        # Cache key includes position, direction, AND size (so cache invalidates on growth)
+        if (self._cached_cells is None or
+            self._cached_pos != (ix, iy) or
+            self._cached_dir != self.direction or
+            len(self._cached_cells) != len(self.get_shape())):
             self._cached_cells = [(ix + dx, iy + dy) for dx, dy in self.get_shape()]
             self._cached_pos = (ix, iy)
             self._cached_dir = self.direction
@@ -760,20 +761,38 @@ class Simulation:
 
                     cells2 = set(fish2.get_cells())
 
-                    # Check for collision (overlapping cells)
-                    if not (cells1 & cells2):
+                    # Check for collision: overlapping OR adjacent (shared edge)
+                    # Adjacent means any cell from fish1 is next to any cell from fish2
+                    collision = False
+                    if cells1 & cells2:
+                        # Overlapping cells
+                        collision = True
+                    else:
+                        # Check for adjacent cells (shared edge, not diagonal)
+                        for (x1, y1) in cells1:
+                            for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                                if (x1 + dx, y1 + dy) in cells2:
+                                    collision = True
+                                    break
+                            if collision:
+                                break
+
+                    if not collision:
                         continue
+
                     # Collision! Bigger fish eats smaller
                     if fish1.size_value > fish2.size_value:
                         # Fish1 eats fish2 - grow by half eaten fish's pixels
                         fish1.grow_from_eating(len(fish2.get_shape()))
-                        fish1.randomize_speed()  # New speed after eating
+                        fish1._cached_cells = None  # Clear cache after growth
+                        fish1.randomize_speed()
                         fish2.alive = False
                         fish_to_remove.add(j)
                     elif fish2.size_value > fish1.size_value:
                         # Fish2 eats fish1 - grow by half eaten fish's pixels
                         fish2.grow_from_eating(len(fish1.get_shape()))
-                        fish2.randomize_speed()  # New speed after eating
+                        fish2._cached_cells = None  # Clear cache after growth
+                        fish2.randomize_speed()
                         fish1.alive = False
                         fish_to_remove.add(i)
                         break  # Fish1 is dead, stop checking its collisions
@@ -781,12 +800,14 @@ class Simulation:
                         # Same size - 50/50 chance
                         if np.random.random() < 0.5:
                             fish1.grow_from_eating(len(fish2.get_shape()))
-                            fish1.randomize_speed()  # New speed after eating
+                            fish1._cached_cells = None  # Clear cache after growth
+                            fish1.randomize_speed()
                             fish2.alive = False
                             fish_to_remove.add(j)
                         else:
                             fish2.grow_from_eating(len(fish1.get_shape()))
-                            fish2.randomize_speed()  # New speed after eating
+                            fish2._cached_cells = None  # Clear cache after growth
+                            fish2.randomize_speed()
                             fish1.alive = False
                             fish_to_remove.add(i)
                             break
