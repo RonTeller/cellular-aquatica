@@ -30,7 +30,7 @@ class Fish:
         self.vertical_tendency = np.random.uniform(-0.02, 0.02)  # Slight up/down preference
 
         # Size as numeric value (affects shape and collision outcomes)
-        # All fish start small (size_value = 1.0 = 3 pixels)
+        # All fish start small (size_value = 1.0)
         self.size_value = 1.0
 
         self.alive = True
@@ -38,10 +38,48 @@ class Fish:
         self.max_age = np.random.randint(800, 2000)  # Lifespan in frames
         self.turn_cooldown = 0  # Prevent rapid direction changes
 
+        # Random color for this fish (vibrant, saturated colors)
+        self.color = self._generate_random_color()
+        # Eye color (black or white)
+        self.eye_color = (0, 0, 0) if np.random.random() < 0.7 else (255, 255, 255)
+
         # Cached cells for performance (invalidated when position/direction changes)
         self._cached_cells = None
         self._cached_pos = None
         self._cached_dir = None
+        self._cached_shape = None
+
+    def _generate_random_color(self) -> tuple:
+        """Generate a random vibrant fish color."""
+        # Use HSV-like approach for vibrant colors
+        # Hue: full range, Saturation: high, Value: high
+        hue = np.random.random()
+
+        # Convert hue to RGB (simplified HSV to RGB with S=0.8, V=1.0)
+        h = hue * 6.0
+        c = 0.8  # Chroma (saturation * value)
+        x = c * (1 - abs(h % 2 - 1))
+        m = 0.2  # To brighten
+
+        if h < 1:
+            r, g, b = c, x, 0
+        elif h < 2:
+            r, g, b = x, c, 0
+        elif h < 3:
+            r, g, b = 0, c, x
+        elif h < 4:
+            r, g, b = 0, x, c
+        elif h < 5:
+            r, g, b = x, 0, c
+        else:
+            r, g, b = c, 0, x
+
+        # Add some random variation
+        r = min(255, int((r + m) * 255 + np.random.randint(-20, 20)))
+        g = min(255, int((g + m) * 255 + np.random.randint(-20, 20)))
+        b = min(255, int((b + m) * 255 + np.random.randint(-20, 20)))
+
+        return (max(0, r), max(0, g), max(0, b))
 
     @property
     def size(self) -> str:
@@ -55,11 +93,13 @@ class Fish:
 
     def grow_from_eating(self, eaten_pixel_count: int) -> None:
         """Grow the fish by half the eaten fish's pixels (rounded down)."""
-        # Each 2 pixels ≈ 1.0 size_value unit
-        pixels_gained = eaten_pixel_count // 2
+        # Each 3 pixels ≈ 0.5 size_value unit (slower growth for bigger fish)
+        pixels_gained = eaten_pixel_count // 3
         self.size_value += pixels_gained * 0.5
         # Cap max size
         self.size_value = min(self.size_value, 5.0)
+        # Clear cached shape
+        self._cached_shape = None
 
     def randomize_speed(self) -> None:
         """Randomize swim speed between 0.5x and 2x base speed."""
@@ -67,41 +107,84 @@ class Fish:
         self.swim_speed = Fish.BASE_SPEED * multiplier
 
     def get_shape(self) -> list:
-        """Get fish shape as list of (dx, dy) offsets from head position."""
+        """Get fish shape as list of (dx, dy, is_eye) tuples from head position.
+
+        Returns list of (dx, dy, is_eye) where is_eye=True for eye cells.
+        """
+        if self._cached_shape is not None and self._cached_dir == self.direction:
+            return self._cached_shape
+
         d = self.direction
 
         if self.size == 'small':
-            # Small fish: 3 cells, flat horizontal
-            #  <oo
-            return [
-                (0, 0),           # Head
-                (-d, 0),          # Body
-                (-d * 2, 0),      # Tail
+            # Small fish: 8 pixels with eye
+            #   ●o      <- eye and top of head
+            #  oooo<    <- body with pointed tail
+            shape = [
+                (0, -1, True),     # Eye
+                (-d, -1, False),   # Top of head
+                (0, 0, False),     # Nose/head
+                (-d, 0, False),    # Body 1
+                (-d * 2, 0, False),  # Body 2
+                (-d * 3, 0, False),  # Body 3
+                (-d * 4, 0, False),  # Tail base
+                (-d * 5, -1, False), # Tail tip (angled up)
             ]
         elif self.size == 'medium':
-            # Medium fish: 5 cells
-            #  <ooo<
-            return [
-                (0, 0),           # Head
-                (-d, 0),          # Body 1
-                (-d * 2, 0),      # Body 2
-                (-d * 3, 0),      # Body 3
-                (-d * 4, 0),      # Tail
+            # Medium fish: 14 pixels with eye and fins
+            #    ●oo       <- eye and dorsal area
+            #   ooooo<     <- main body
+            #    oo        <- ventral/belly
+            shape = [
+                (-d, -1, True),      # Eye
+                (-d * 2, -1, False), # Dorsal 1
+                (-d * 3, -1, False), # Dorsal 2 (fin)
+                (0, 0, False),       # Nose
+                (-d, 0, False),      # Head
+                (-d * 2, 0, False),  # Body 1
+                (-d * 3, 0, False),  # Body 2
+                (-d * 4, 0, False),  # Body 3
+                (-d * 5, 0, False),  # Tail base
+                (-d * 6, -1, False), # Tail top
+                (-d * 6, 1, False),  # Tail bottom
+                (-d * 2, 1, False),  # Belly 1
+                (-d * 3, 1, False),  # Belly 2 / ventral fin
             ]
         else:
-            # Large fish: 7 cells with fins
-            #    o
-            #  <ooooo
-            #    o
-            return [
-                (0, 0),           # Head
-                (-d, 0),          # Body 1
-                (-d * 2, 0),      # Body 2
-                (-d * 3, 0),      # Body 3
-                (-d * 4, 0),      # Body 4
-                (-d * 2, -1),     # Dorsal fin
-                (-d * 2, 1),      # Ventral fin
+            # Large fish: 22 pixels with eye, fins, and forked tail
+            #      o         <- dorsal fin tip
+            #    ●ooo        <- eye and upper body
+            #   oooooo<      <- main body with tail
+            #    oooo   <    <- lower body and tail fork
+            #      o         <- ventral fin
+            shape = [
+                (-d * 3, -2, False),  # Dorsal fin tip
+                (-d, -1, True),       # Eye
+                (-d * 2, -1, False),  # Upper body 1
+                (-d * 3, -1, False),  # Upper body 2 (dorsal base)
+                (-d * 4, -1, False),  # Upper body 3
+                (0, 0, False),        # Nose
+                (-d, 0, False),       # Head
+                (-d * 2, 0, False),   # Body 1
+                (-d * 3, 0, False),   # Body 2
+                (-d * 4, 0, False),   # Body 3
+                (-d * 5, 0, False),   # Body 4
+                (-d * 6, 0, False),   # Tail base
+                (-d * 7, -1, False),  # Tail fork upper
+                (-d * 7, 1, False),   # Tail fork lower
+                (-d * 2, 1, False),   # Lower body 1
+                (-d * 3, 1, False),   # Lower body 2
+                (-d * 4, 1, False),   # Lower body 3
+                (-d * 5, 1, False),   # Lower body 4
+                (-d * 3, 2, False),   # Ventral fin
             ]
+
+        self._cached_shape = shape
+        return shape
+
+    def get_shape_simple(self) -> list:
+        """Get fish shape as simple (dx, dy) list for collision detection."""
+        return [(dx, dy) for dx, dy, _ in self.get_shape()]
 
     def get_cells(self) -> list:
         """Get world coordinates of all fish cells (cached for performance)."""
@@ -112,11 +195,16 @@ class Fish:
             self._cached_pos != (ix, iy) or
             self._cached_dir != self.direction or
             len(self._cached_cells) != len(self.get_shape())):
-            self._cached_cells = [(ix + dx, iy + dy) for dx, dy in self.get_shape()]
+            self._cached_cells = [(ix + dx, iy + dy) for dx, dy, _ in self.get_shape()]
             self._cached_pos = (ix, iy)
             self._cached_dir = self.direction
 
         return self._cached_cells
+
+    def get_cells_with_type(self) -> list:
+        """Get world coordinates with cell type (for rendering with eye color)."""
+        ix, iy = int(round(self.x)), int(round(self.y))
+        return [(ix + dx, iy + dy, is_eye) for dx, dy, is_eye in self.get_shape()]
 
     def update_swimming(self) -> None:
         """Update swimming motion - natural side-to-side movement."""
@@ -257,11 +345,15 @@ class Simulation:
         self.fish = []
         self.skeletons = []  # Dead fish skeletons
         self.fish_spawn_chance = 0.02  # Base chance to spawn (multiplied by water ratio)
-        self.fish_death_chance = 0.0005  # Base chance of death per frame (increases with size)
+        self.fish_death_chance = 0.0001  # Base chance of death per frame (increases with size)
+        self.fish_eat_chance = 0.2  # Chance that collision results in eating (vs just bouncing)
         self.min_water_for_life = 50  # Minimum water cells needed for fish to spawn
 
         # Fish ID grid - tracks which fish owns each cell (-1 = no fish)
         self.fish_grid = np.full((self.height, self.width), -1, dtype=np.int32)
+
+        # Fish color grid - stores RGB color for each fish cell (for per-fish coloring)
+        self.fish_color_grid = np.zeros((self.height, self.width, 3), dtype=np.uint8)
 
         # Seasons system
         self.season = 'rain'  # 'rain' or 'dry'
@@ -806,39 +898,52 @@ class Simulation:
                     if not collision:
                         continue
 
-                    # Collision! Bigger fish eats smaller
-                    if fish1.size_value > fish2.size_value:
-                        # Fish1 eats fish2 - grow by half eaten fish's pixels
-                        fish1.grow_from_eating(len(fish2.get_shape()))
-                        fish1._cached_cells = None  # Clear cache after growth
-                        fish1.randomize_speed()
-                        fish2.alive = False
-                        fish_to_remove.add(j)
-                    elif fish2.size_value > fish1.size_value:
-                        # Fish2 eats fish1 - grow by half eaten fish's pixels
-                        fish2.grow_from_eating(len(fish1.get_shape()))
-                        fish2._cached_cells = None  # Clear cache after growth
-                        fish2.randomize_speed()
-                        fish1.alive = False
-                        fish_to_remove.add(i)
-                        break  # Fish1 is dead, stop checking its collisions
-                    else:
-                        # Same size - 50/50 chance
-                        if np.random.random() < 0.5:
+                    # Collision! Check if eating happens or just bounce
+                    if np.random.random() < self.fish_eat_chance:
+                        # Eating happens - bigger fish eats smaller
+                        if fish1.size_value > fish2.size_value:
+                            # Fish1 eats fish2 - grow by half eaten fish's pixels
                             fish1.grow_from_eating(len(fish2.get_shape()))
                             fish1._cached_cells = None  # Clear cache after growth
                             fish1.randomize_speed()
                             fish2.alive = False
                             fish_to_remove.add(j)
-                        else:
+                        elif fish2.size_value > fish1.size_value:
+                            # Fish2 eats fish1 - grow by half eaten fish's pixels
                             fish2.grow_from_eating(len(fish1.get_shape()))
                             fish2._cached_cells = None  # Clear cache after growth
                             fish2.randomize_speed()
                             fish1.alive = False
                             fish_to_remove.add(i)
-                            break
+                            break  # Fish1 is dead, stop checking its collisions
+                        else:
+                            # Same size - 50/50 chance
+                            if np.random.random() < 0.5:
+                                fish1.grow_from_eating(len(fish2.get_shape()))
+                                fish1._cached_cells = None  # Clear cache after growth
+                                fish1.randomize_speed()
+                                fish2.alive = False
+                                fish_to_remove.add(j)
+                            else:
+                                fish2.grow_from_eating(len(fish1.get_shape()))
+                                fish2._cached_cells = None  # Clear cache after growth
+                                fish2.randomize_speed()
+                                fish1.alive = False
+                                fish_to_remove.add(i)
+                                break
+                    else:
+                        # No eating - both fish turn around and change speed
+                        fish1.direction *= -1
+                        fish1.vx = -fish1.vx
+                        fish1._cached_cells = None
+                        fish1.randomize_speed()
 
-        # Fourth pass: draw surviving fish and track in fish_grid
+                        fish2.direction *= -1
+                        fish2.vx = -fish2.vx
+                        fish2._cached_cells = None
+                        fish2.randomize_speed()
+
+        # Fourth pass: draw surviving fish and track in fish_grid with colors
         for i, fish in enumerate(self.fish):
             if i in fish_to_remove or not fish.alive:
                 continue
@@ -846,13 +951,18 @@ class Simulation:
             cells_drawn = 0
             expected_cells = len(fish.get_shape())
 
-            for fx, fy in fish.get_cells():
+            for fx, fy, is_eye in fish.get_cells_with_type():
                 if 0 <= fx < width and 0 <= fy < height:
                     cell = grid[fy, fx]
                     # Draw fish if cell is water or already fish (could be overlapping)
                     if cell == MAT_WATER or cell == MAT_FISH:
                         grid[fy, fx] = MAT_FISH
                         self.fish_grid[fy, fx] = fish.id
+                        # Store color (eye color or body color)
+                        if is_eye:
+                            self.fish_color_grid[fy, fx] = fish.eye_color
+                        else:
+                            self.fish_color_grid[fy, fx] = fish.color
                         cells_drawn += 1
 
             # Structural integrity check: fish must have all its cells drawn
@@ -872,9 +982,11 @@ class Simulation:
             if i < len(self.fish):
                 dead_fish = self.fish[i]
                 # Create a skeleton at the fish's position with same shape
+                # Extract (dx, dy) from shape tuples (ignoring is_eye flag)
+                simple_shape = [(dx, dy) for dx, dy, _ in dead_fish.get_shape()]
                 skeleton = Skeleton(
                     dead_fish.x, dead_fish.y,
-                    dead_fish.get_shape(),
+                    simple_shape,
                     dead_fish.direction
                 )
                 self.skeletons.append(skeleton)

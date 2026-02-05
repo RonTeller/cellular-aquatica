@@ -112,6 +112,9 @@ def main():
                     elif key == 'death':
                         simulation.fish_death_chance = max(0, min(0.01,
                             simulation.fish_death_chance + delta))
+                    elif key == 'eat':
+                        simulation.fish_eat_chance = max(0, min(1.0,
+                            simulation.fish_eat_chance + delta))
                     elif key == 'rain':
                         rain_intensity = max(0, min(MAX_RAIN_INTENSITY,
                             int(rain_intensity + delta)))
@@ -164,7 +167,7 @@ def main():
                 simulation.update()
 
         # Render
-        renderer.render(simulation.grid)
+        renderer.render(simulation.grid, simulation.fish_color_grid)
 
         # Calculate FPS
         fps = clock.get_fps()
@@ -173,6 +176,7 @@ def main():
             fish_count=len(simulation.fish),
             spawn_chance=simulation.fish_spawn_chance,
             death_chance=simulation.fish_death_chance,
+            eat_chance=simulation.fish_eat_chance,
             evap_rate=simulation.evaporation_rate,
             season=simulation.season,
             water_ratio=simulation.get_water_ratio(),

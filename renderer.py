@@ -153,7 +153,8 @@ class Renderer:
     def _init_settings_panel(self):
         """Initialize settings panel with default values."""
         self.settings_panel.add_setting("Fish Spawn Rate", "spawn", 0.020, 0.0, 0.1, 0.005, ".3f")
-        self.settings_panel.add_setting("Fish Death Rate", "death", 0.0005, 0.0, 0.01, 0.0001, ".4f")
+        self.settings_panel.add_setting("Fish Death Rate", "death", 0.0001, 0.0, 0.01, 0.00005, ".5f")
+        self.settings_panel.add_setting("Fish Eat Chance", "eat", 0.2, 0.0, 1.0, 0.05, ".2f")
         self.settings_panel.add_setting("Rain Intensity", "rain", 1, 0, 50, 1, ".0f")
         self.settings_panel.add_setting("Evaporation Rate", "evap", 0.01, 0.0, 0.1, 0.005, ".3f")
         self.settings_panel.add_setting("Sim Speed", "speed", 1, 1, 20, 1, ".0f")
@@ -173,21 +174,30 @@ class Renderer:
         """Get a setting value from the panel."""
         return self.settings_panel.get_value(key)
 
-    def render(self, grid: np.ndarray) -> None:
+    def render(self, grid: np.ndarray, fish_color_grid: np.ndarray = None) -> None:
         """
         Render the simulation grid to the screen with Noita-style visuals.
 
         Args:
             grid: 2D numpy array of material types
+            fish_color_grid: Optional 3D array (h, w, 3) of RGB colors for fish cells
         """
         # Base colors from lookup
         colors = COLOR_LOOKUP[grid].astype(np.int16)
 
+        # Apply per-fish colors if provided
+        if fish_color_grid is not None:
+            fish_mask = grid == Material.FISH
+            if np.any(fish_mask):
+                colors[fish_mask] = fish_color_grid[fish_mask].astype(np.int16)
+
         # Pre-compute variation lookup (material index -> variation amount)
         var_lookup = np.zeros(256, dtype=np.int16)
-        for mat in [Material.STONE, Material.DIRT, Material.METAL, Material.FISH, Material.SKELETON]:
+        for mat in [Material.STONE, Material.DIRT, Material.METAL, Material.SKELETON]:
             var_lookup[mat] = MATERIAL_VARIATION[mat]
         var_lookup[Material.AIR] = 3  # Slight air variation
+        # Fish get slight variation too (but base color is from fish_color_grid)
+        var_lookup[Material.FISH] = 10
 
         # Get variation amount for each cell based on material type
         var_amounts = var_lookup[grid]
@@ -227,9 +237,10 @@ class Renderer:
             self.screen.blit(self.sim_surface, (0, 0))
 
     def render_ui(self, fps: float, rain_intensity: int, paused: bool, sim_steps: int,
-                  fish_count: int = 0, spawn_chance: float = 0.02, death_chance: float = 0.0005,
-                  evap_rate: float = 0.01, season: str = 'rain', water_ratio: float = 0.0,
-                  wind_speed: float = 0.0, dry_threshold: float = 50, rain_threshold: float = 20) -> None:
+                  fish_count: int = 0, spawn_chance: float = 0.02, death_chance: float = 0.0001,
+                  eat_chance: float = 0.2, evap_rate: float = 0.01, season: str = 'rain',
+                  water_ratio: float = 0.0, wind_speed: float = 0.0, dry_threshold: float = 50,
+                  rain_threshold: float = 20) -> None:
         """
         Render UI overlay with stats and settings panel.
         """
@@ -283,6 +294,7 @@ class Renderer:
         # Update settings panel values
         self.settings_panel.update_value("spawn", spawn_chance)
         self.settings_panel.update_value("death", death_chance)
+        self.settings_panel.update_value("eat", eat_chance)
         self.settings_panel.update_value("rain", rain_intensity)
         self.settings_panel.update_value("evap", evap_rate)
         self.settings_panel.update_value("speed", sim_steps)
