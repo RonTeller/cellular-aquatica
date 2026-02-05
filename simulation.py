@@ -585,17 +585,24 @@ class Simulation:
             fish.update_swimming()
 
             # Pre-check: if fish is near screen edge, force turn away from edge
-            fish_size = len(fish.get_shape())
-            margin = fish_size + 2  # Safety margin based on fish size
-            if fish.direction == -1 and fish.x < margin:
+            # When turning, the body flips to the other side, so we need extra margin
+            # and must also move the fish to accommodate the body flip
+            fish_length = len(fish.get_shape())
+            body_length = fish_length - 1  # Body extends behind head
+
+            if fish.direction == -1 and fish.x < body_length + 3:
                 # Near left edge, swimming left - force turn right
+                # After turning, body will extend LEFT, so move fish right first
                 fish.direction = 1
                 fish.vx = abs(fish.vx)
+                fish.x = max(fish.x, body_length + 3)  # Move away from edge
                 fish._cached_cells = None
-            elif fish.direction == 1 and fish.x > self.width - margin:
+            elif fish.direction == 1 and fish.x > self.width - body_length - 3:
                 # Near right edge, swimming right - force turn left
+                # After turning, body will extend RIGHT, so move fish left first
                 fish.direction = -1
                 fish.vx = -abs(fish.vx)
+                fish.x = min(fish.x, self.width - body_length - 3)  # Move away from edge
                 fish._cached_cells = None
 
             # Calculate new position
@@ -630,10 +637,24 @@ class Simulation:
                 fish.randomize_speed()
                 fish.vertical_tendency = -fish.vertical_tendency
 
+                # After turning, body extends the other way - account for this
+                body_length = len(fish.get_shape()) - 1
+
                 # Try to find a valid position moving AWAY from where we came
+                # Prioritize positions that move in the new direction
                 found_valid = False
+                search_offsets_x = [
+                    fish.direction * body_length,  # Move enough for body
+                    fish.direction * (body_length + 1),
+                    fish.direction * (body_length + 2),
+                    fish.direction * 2,
+                    fish.direction * 3,
+                    fish.direction,
+                    0
+                ]
+
                 for nudge_y in [0, -1, 1, -2, 2, -3, 3]:
-                    for nudge_x in [fish.direction * 2, fish.direction, fish.direction * 3, 0]:
+                    for nudge_x in search_offsets_x:
                         test_x = old_x + nudge_x
                         test_y = old_y + nudge_y
                         fish.x, fish.y = test_x, test_y
@@ -656,14 +677,18 @@ class Simulation:
                         break
 
                 if not found_valid:
-                    # Still stuck - try larger nudges in any direction
-                    for nudge_y in range(-5, 6):
-                        for nudge_x in range(-5, 6):
-                            if nudge_x == 0 and nudge_y == 0:
-                                continue
+                    # Still stuck - try larger nudges toward center of screen
+                    center_dir = 1 if old_x < self.width / 2 else -1
+                    for dist in range(1, 10):
+                        for nudge_y in [0, -1, 1, -2, 2]:
+                            nudge_x = center_dir * dist
                             test_x = old_x + nudge_x
                             test_y = old_y + nudge_y
                             fish.x, fish.y = test_x, test_y
+
+                            # Set direction toward center
+                            fish.direction = center_dir
+                            fish.vx = center_dir * fish.swim_speed
                             fish._cached_cells = None
 
                             valid = True
@@ -676,13 +701,6 @@ class Simulation:
                                     break
 
                             if valid:
-                                # Found valid position - set direction to move away from edges
-                                if fish.x < self.width / 2:
-                                    fish.direction = 1
-                                else:
-                                    fish.direction = -1
-                                fish.vx = fish.direction * fish.swim_speed
-                                fish._cached_cells = None
                                 found_valid = True
                                 break
                         if found_valid:
