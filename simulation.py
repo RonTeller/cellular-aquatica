@@ -8,8 +8,13 @@ class Fish:
     """A fish that swims in water with natural movement."""
 
     BASE_SPEED = 0.6  # Base swimming speed
+    _next_id = 0  # Class-level ID counter
 
     def __init__(self, x: float, y: float):
+        # Unique ID for tracking structural integrity
+        self.id = Fish._next_id
+        Fish._next_id += 1
+
         self.x = float(x)
         self.y = float(y)
 
@@ -254,6 +259,9 @@ class Simulation:
         self.fish_death_chance = 0.0005  # Base chance of death per frame (increases with size)
         self.min_water_for_life = 50  # Minimum water cells needed for fish to spawn
 
+        # Fish ID grid - tracks which fish owns each cell (-1 = no fish)
+        self.fish_grid = np.full((self.height, self.width), -1, dtype=np.int32)
+
         # Seasons system
         self.season = 'rain'  # 'rain' or 'dry'
         self.rain_threshold = 0.50  # Switch to dry season when water reaches 50%
@@ -302,94 +310,113 @@ class Simulation:
         # Alternate x-iteration direction each frame to reduce left/right bias
         reverse_x = (self.frame // 2) % 2 == 1
 
+        # Cache enum values as integers to avoid enum lookup overhead in hot loop
+        MAT_WATER = int(Material.WATER)
+        MAT_DIRT = int(Material.DIRT)
+        grid = self.grid  # Local reference for speed
+        rand_dirs = self._rand_dirs
+        width = self.width
+        height = self.height
+
         # Process from bottom to top for falling materials
-        for y in range(self.height - 2, -1, -1):
+        for y in range(height - 2, -1, -1):
             start_x = (y + offset) % 2
-            x_range = range(start_x, self.width, 2)
             if reverse_x:
-                x_range = range(self.width - 1 - ((self.width - 1 - start_x) % 2), -1, -2)
+                x_range = range(width - 1 - ((width - 1 - start_x) % 2), -1, -2)
+            else:
+                x_range = range(start_x, width, 2)
 
             for x in x_range:
-                material = self.grid[y, x]
-                if material == Material.WATER:
-                    self._update_water(x, y, int(self._rand_dirs[y, x]))
-                elif material == Material.DIRT:
-                    self._update_dirt(x, y, int(self._rand_dirs[y, x]))
+                material = grid[y, x]
+                if material == MAT_WATER:
+                    self._update_water_fast(grid, x, y, int(rand_dirs[y, x]), width, height)
+                elif material == MAT_DIRT:
+                    self._update_dirt_fast(grid, x, y, int(rand_dirs[y, x]), width, height)
 
     def _update_water(self, x: int, y: int, rand_dir: int) -> None:
         """Update a water cell with 2-cell lookahead for better flow."""
-        if self.grid[y, x] != Material.WATER:
-            return
+        self._update_water_fast(self.grid, x, y, rand_dir, self.width, self.height)
 
-        g = self.grid
-        h, w = self.height, self.width
+    def _update_water_fast(self, g, x: int, y: int, rand_dir: int, w: int, h: int) -> None:
+        """Optimized water update with pre-cached values."""
+        # Use integer constants to avoid enum lookup overhead
+        AIR = 0
+        WATER = 3
+
+        if g[y, x] != WATER:
+            return
 
         # Fall off bottom of screen
         if y == h - 1:
-            g[y, x] = Material.AIR
+            g[y, x] = AIR
             self._water_count -= 1
             return
 
         # 1. Try to move straight down
-        if y + 1 < h and g[y + 1, x] == Material.AIR:
-            g[y + 1, x] = Material.WATER
-            g[y, x] = Material.AIR
+        if g[y + 1, x] == AIR:
+            g[y + 1, x] = WATER
+            g[y, x] = AIR
             return
 
         # 2. Try diagonal down
-        for dx in [rand_dir, -rand_dir]:
-            nx, ny = x + dx, y + 1
-            if 0 <= nx < w and ny < h and g[ny, nx] == Material.AIR:
-                g[ny, nx] = Material.WATER
-                g[y, x] = Material.AIR
+        for dx in (rand_dir, -rand_dir):
+            nx = x + dx
+            if 0 <= nx < w and g[y + 1, nx] == AIR:
+                g[y + 1, nx] = WATER
+                g[y, x] = AIR
                 return
 
         # 3. Look 2 cells ahead
-        for dx in [rand_dir, -rand_dir]:
+        for dx in (rand_dir, -rand_dir):
             nx = x + dx
-            if 0 <= nx < w and g[y, nx] == Material.AIR:
+            if 0 <= nx < w and g[y, nx] == AIR:
                 nx2 = x + dx * 2
-                can_flow_down = (y + 1 < h and g[y + 1, nx] == Material.AIR)
-                can_flow_down2 = (0 <= nx2 < w and y + 1 < h and g[y + 1, nx2] == Material.AIR)
+                can_flow_down = g[y + 1, nx] == AIR
+                can_flow_down2 = (0 <= nx2 < w and g[y + 1, nx2] == AIR)
                 if can_flow_down or can_flow_down2:
-                    g[y, nx] = Material.WATER
-                    g[y, x] = Material.AIR
+                    g[y, nx] = WATER
+                    g[y, x] = AIR
                     return
 
         # 4. Simple horizontal spread
-        for dx in [rand_dir, -rand_dir]:
+        for dx in (rand_dir, -rand_dir):
             nx = x + dx
-            if 0 <= nx < w and g[y, nx] == Material.AIR:
-                g[y, nx] = Material.WATER
-                g[y, x] = Material.AIR
+            if 0 <= nx < w and g[y, nx] == AIR:
+                g[y, nx] = WATER
+                g[y, x] = AIR
                 return
 
     def _update_dirt(self, x: int, y: int, rand_dir: int) -> None:
         """Update a dirt cell - falls down if possible."""
-        if self.grid[y, x] != Material.DIRT:
-            return
+        self._update_dirt_fast(self.grid, x, y, rand_dir, self.width, self.height)
 
-        g = self.grid
-        h, w = self.height, self.width
+    def _update_dirt_fast(self, g, x: int, y: int, rand_dir: int, w: int, h: int) -> None:
+        """Optimized dirt update with pre-cached values."""
+        # Use integer constants to avoid enum lookup overhead
+        AIR = 0
+        DIRT = 2
+
+        if g[y, x] != DIRT:
+            return
 
         # Fall off bottom of screen
         if y == h - 1:
-            g[y, x] = Material.AIR
+            g[y, x] = AIR
             return
 
         # 1. Try to fall straight down
-        if y + 1 < h and g[y + 1, x] == Material.AIR:
-            g[y + 1, x] = Material.DIRT
-            g[y, x] = Material.AIR
+        if g[y + 1, x] == AIR:
+            g[y + 1, x] = DIRT
+            g[y, x] = AIR
             return
 
         # 2. Try diagonal fall
-        for dx in [rand_dir, -rand_dir]:
-            nx, ny = x + dx, y + 1
-            if 0 <= nx < w and ny < h:
-                if g[y, nx] == Material.AIR and g[ny, nx] == Material.AIR:
-                    g[ny, nx] = Material.DIRT
-                    g[y, x] = Material.AIR
+        for dx in (rand_dir, -rand_dir):
+            nx = x + dx
+            if 0 <= nx < w:
+                if g[y, nx] == AIR and g[y + 1, nx] == AIR:
+                    g[y + 1, nx] = DIRT
+                    g[y, x] = AIR
                     return
 
     def _update_metal_objects(self) -> None:
@@ -527,7 +554,8 @@ class Simulation:
         """Update all fish - movement, lifecycle, collisions, and death."""
         fish_to_remove = set()
 
-        # First pass: clear all fish from grid
+        # First pass: clear all fish from grid and fish_grid
+        self.fish_grid.fill(-1)
         for fish in self.fish:
             for fx, fy in fish.get_cells():
                 if 0 <= fx < self.width and 0 <= fy < self.height:
@@ -556,6 +584,20 @@ class Simulation:
             # Update swimming motion (no gravity - fish swim freely)
             fish.update_swimming()
 
+            # Pre-check: if fish is near screen edge, force turn away from edge
+            fish_size = len(fish.get_shape())
+            margin = fish_size + 2  # Safety margin based on fish size
+            if fish.direction == -1 and fish.x < margin:
+                # Near left edge, swimming left - force turn right
+                fish.direction = 1
+                fish.vx = abs(fish.vx)
+                fish._cached_cells = None
+            elif fish.direction == 1 and fish.x > self.width - margin:
+                # Near right edge, swimming right - force turn left
+                fish.direction = -1
+                fish.vx = -abs(fish.vx)
+                fish._cached_cells = None
+
             # Calculate new position
             new_x = fish.x + fish.vx
             new_y = fish.y + fish.vy
@@ -581,19 +623,21 @@ class Simulation:
                 # Can't move - revert position
                 fish.x, fish.y = old_x, old_y
 
-                # Turn around and find a valid position moving in the new direction
-                fish.turn_around()
+                # Force turn away from the obstacle
+                fish.direction *= -1
+                fish.vx = -fish.vx
+                fish._cached_cells = None  # Clear cache since direction changed
                 fish.randomize_speed()
                 fish.vertical_tendency = -fish.vertical_tendency
 
-                # Try to move in the new direction immediately
-                # Search for a valid position that allows forward movement
+                # Try to find a valid position moving AWAY from where we came
                 found_valid = False
                 for nudge_y in [0, -1, 1, -2, 2, -3, 3]:
-                    for nudge_x in [fish.direction, fish.direction * 2, 0, fish.direction * 3]:
+                    for nudge_x in [fish.direction * 2, fish.direction, fish.direction * 3, 0]:
                         test_x = old_x + nudge_x
                         test_y = old_y + nudge_y
                         fish.x, fish.y = test_x, test_y
+                        fish._cached_cells = None
 
                         # Check if this position is valid
                         valid = True
@@ -612,14 +656,15 @@ class Simulation:
                         break
 
                 if not found_valid:
-                    # Try the other direction as last resort
-                    fish.direction *= -1
-                    fish.vx = -fish.vx
-                    for nudge_y in [0, -1, 1, -2, 2]:
-                        for nudge_x in [fish.direction, fish.direction * 2, 0]:
+                    # Still stuck - try larger nudges in any direction
+                    for nudge_y in range(-5, 6):
+                        for nudge_x in range(-5, 6):
+                            if nudge_x == 0 and nudge_y == 0:
+                                continue
                             test_x = old_x + nudge_x
                             test_y = old_y + nudge_y
                             fish.x, fish.y = test_x, test_y
+                            fish._cached_cells = None
 
                             valid = True
                             for fx, fy in fish.get_cells():
@@ -631,13 +676,22 @@ class Simulation:
                                     break
 
                             if valid:
+                                # Found valid position - set direction to move away from edges
+                                if fish.x < self.width / 2:
+                                    fish.direction = 1
+                                else:
+                                    fish.direction = -1
+                                fish.vx = fish.direction * fish.swim_speed
+                                fish._cached_cells = None
                                 found_valid = True
                                 break
                         if found_valid:
                             break
 
                 if not found_valid:
-                    # Completely stuck - stay at original position
+                    # Completely stuck - kill the fish
+                    fish.alive = False
+                    fish_to_remove.add(i)
                     fish.x, fish.y = old_x, old_y
 
         # Third pass: check for collisions using spatial hashing
@@ -719,15 +773,38 @@ class Simulation:
                             fish_to_remove.add(i)
                             break
 
-        # Fourth pass: draw surviving fish
+        # Fourth pass: draw surviving fish and track in fish_grid
         for i, fish in enumerate(self.fish):
             if i in fish_to_remove or not fish.alive:
                 continue
 
+            cells_drawn = 0
+            expected_cells = len(fish.get_shape())
+
             for fx, fy in fish.get_cells():
                 if 0 <= fx < self.width and 0 <= fy < self.height:
-                    if self.grid[fy, fx] == Material.WATER:
+                    cell = self.grid[fy, fx]
+                    # Draw fish if cell is water or already fish (could be overlapping)
+                    if cell in (Material.WATER, Material.FISH):
                         self.grid[fy, fx] = Material.FISH
+                        self.fish_grid[fy, fx] = fish.id
+                        cells_drawn += 1
+
+            # Structural integrity check: fish must have all its cells drawn
+            if cells_drawn < expected_cells:
+                # Fish lost integrity - mark for removal
+                fish.alive = False
+                fish_to_remove.add(i)
+
+        # Fifth pass: verify structural integrity - check for orphaned fish pixels
+        # Any FISH cell that doesn't match a valid fish ID gets cleared
+        for y in range(self.height):
+            for x in range(self.width):
+                if self.grid[y, x] == Material.FISH:
+                    fish_id = self.fish_grid[y, x]
+                    if fish_id == -1:
+                        # Orphaned fish pixel - clear it
+                        self.grid[y, x] = Material.WATER
 
         # Convert dead fish to skeletons and remove them
         for i in sorted(fish_to_remove, reverse=True):
