@@ -1019,9 +1019,20 @@ class Simulation:
         elif self.season == 'dry' and water_ratio <= self.dry_threshold:
             self.season = 'rain'
 
-        # Evaporation during dry season
+        # Evaporation during dry season, but only after all water has settled
         if self.season == 'dry' and self.evaporation_rate > 0:
-            self._evaporate_surface_water()
+            # Check if any water is still falling (has air below it)
+            if not self._has_falling_water():
+                self._evaporate_surface_water()
+
+    def _has_falling_water(self) -> bool:
+        """Check if any water cell has air below it (still falling)."""
+        water_mask = self.grid == Material.WATER
+        # Check if any water has air directly below (excluding bottom row)
+        air_below = np.zeros_like(water_mask)
+        air_below[:-1, :] = self.grid[1:, :] == Material.AIR
+        falling_water = water_mask & air_below
+        return np.any(falling_water)
 
     def _evaporate_surface_water(self) -> None:
         """Evaporate water from the surface - creates steam that rises."""
