@@ -570,15 +570,22 @@ class Simulation:
 
     def _update_fish(self) -> None:
         """Update all fish - movement, lifecycle, collisions, and death."""
+        # Cache material values as integers to avoid enum lookup overhead
+        MAT_FISH = int(Material.FISH)
+        MAT_WATER = int(Material.WATER)
+        grid = self.grid
+        width = self.width
+        height = self.height
+
         fish_to_remove = set()
 
         # First pass: clear all fish from grid and fish_grid
         self.fish_grid.fill(-1)
         for fish in self.fish:
             for fx, fy in fish.get_cells():
-                if 0 <= fx < self.width and 0 <= fy < self.height:
-                    if self.grid[fy, fx] == Material.FISH:
-                        self.grid[fy, fx] = Material.WATER
+                if 0 <= fx < width and 0 <= fy < height:
+                    if grid[fy, fx] == MAT_FISH:
+                        grid[fy, fx] = MAT_WATER
 
         # Second pass: update each fish
         for i, fish in enumerate(self.fish):
@@ -633,11 +640,11 @@ class Simulation:
             fish.x, fish.y = new_x, new_y
 
             for fx, fy in fish.get_cells():
-                if not (0 <= fx < self.width and 0 <= fy < self.height):
+                if not (0 <= fx < width and 0 <= fy < height):
                     can_move = False
                     break
-                cell = self.grid[fy, fx]
-                if cell not in (Material.WATER, Material.FISH):
+                cell = grid[fy, fx]
+                if cell != MAT_WATER and cell != MAT_FISH:
                     can_move = False
                     break
 
@@ -681,10 +688,11 @@ class Simulation:
                         # Check if this position is valid
                         valid = True
                         for fx, fy in fish.get_cells():
-                            if not (0 <= fx < self.width and 0 <= fy < self.height):
+                            if not (0 <= fx < width and 0 <= fy < height):
                                 valid = False
                                 break
-                            if self.grid[fy, fx] not in (Material.WATER, Material.FISH):
+                            cell = grid[fy, fx]
+                            if cell != MAT_WATER and cell != MAT_FISH:
                                 valid = False
                                 break
 
@@ -711,10 +719,11 @@ class Simulation:
 
                             valid = True
                             for fx, fy in fish.get_cells():
-                                if not (0 <= fx < self.width and 0 <= fy < self.height):
+                                if not (0 <= fx < width and 0 <= fy < height):
                                     valid = False
                                     break
-                                if self.grid[fy, fx] not in (Material.WATER, Material.FISH):
+                                cell = grid[fy, fx]
+                                if cell != MAT_WATER and cell != MAT_FISH:
                                     valid = False
                                     break
 
@@ -838,11 +847,11 @@ class Simulation:
             expected_cells = len(fish.get_shape())
 
             for fx, fy in fish.get_cells():
-                if 0 <= fx < self.width and 0 <= fy < self.height:
-                    cell = self.grid[fy, fx]
+                if 0 <= fx < width and 0 <= fy < height:
+                    cell = grid[fy, fx]
                     # Draw fish if cell is water or already fish (could be overlapping)
-                    if cell in (Material.WATER, Material.FISH):
-                        self.grid[fy, fx] = Material.FISH
+                    if cell == MAT_WATER or cell == MAT_FISH:
+                        grid[fy, fx] = MAT_FISH
                         self.fish_grid[fy, fx] = fish.id
                         cells_drawn += 1
 
@@ -854,13 +863,9 @@ class Simulation:
 
         # Fifth pass: verify structural integrity - check for orphaned fish pixels
         # Any FISH cell that doesn't match a valid fish ID gets cleared
-        for y in range(self.height):
-            for x in range(self.width):
-                if self.grid[y, x] == Material.FISH:
-                    fish_id = self.fish_grid[y, x]
-                    if fish_id == -1:
-                        # Orphaned fish pixel - clear it
-                        self.grid[y, x] = Material.WATER
+        # Use vectorized operation for speed
+        orphan_mask = (grid == MAT_FISH) & (self.fish_grid == -1)
+        grid[orphan_mask] = MAT_WATER
 
         # Convert dead fish to skeletons and remove them
         for i in sorted(fish_to_remove, reverse=True):
@@ -1055,8 +1060,6 @@ class Simulation:
 
     def _update_steam(self) -> None:
         """Update steam particles - rise up and drift with wind."""
-        # Steam rises (lighter than air) and is affected by wind
-        # Process from top to bottom so steam can rise without conflicts
         STEAM = int(Material.STEAM)
         AIR = int(Material.AIR)
 
@@ -1064,69 +1067,70 @@ class Simulation:
         h, w = self.height, self.width
         wind = self.wind_speed
 
-        # Process each steam cell from top to bottom
-        for y in range(1, h):  # Start from row 1 (row 0 steam disappears)
-            for x in range(w):
-                if g[y, x] != STEAM:
-                    continue
+        # Find all steam positions (vectorized) - much faster than checking every cell
+        steam_positions = np.argwhere(g == STEAM)
+        if len(steam_positions) == 0:
+            return
 
-                # Determine movement based on wind
-                # Base behavior: rise up
-                # Wind adds horizontal drift tendency
-                rand = np.random.random()
+        # Sort by y (top to bottom) to avoid conflicts
+        steam_positions = steam_positions[steam_positions[:, 0].argsort()]
 
-                # Calculate wind influence (stronger wind = more likely to drift)
-                wind_chance = abs(wind) * 0.7  # 0 to 0.7 chance based on wind strength
-                rise_chance = 0.8 - wind_chance * 0.3  # 0.5 to 0.8 chance to rise
+        # Pre-calculate wind parameters
+        wind_dir = 1 if wind >= 0 else -1
+        wind_chance = abs(wind) * 0.7
+        rise_chance = 0.8 - wind_chance * 0.3
+        drift_bias = 0.5 + abs(wind) * 0.4
 
-                moved = False
+        # Generate random values for all steam particles at once
+        n = len(steam_positions)
+        rand_vals = np.random.random(n)
+        drift_rand = np.random.random(n)
+        dissipate_rand = np.random.random(n)
 
-                if rand < rise_chance:
-                    # Try to rise straight up
-                    if g[y - 1, x] == AIR:
-                        g[y - 1, x] = STEAM
-                        g[y, x] = AIR
-                        moved = True
-                    # If blocked, try diagonal up (wind direction preferred)
-                    elif not moved:
-                        wind_dir = 1 if wind >= 0 else -1
-                        for dx in [wind_dir, -wind_dir]:
-                            nx = x + dx
-                            if 0 <= nx < w and g[y - 1, nx] == AIR:
-                                g[y - 1, nx] = STEAM
-                                g[y, x] = AIR
-                                moved = True
-                                break
+        for i, (y, x) in enumerate(steam_positions):
+            if y == 0 or g[y, x] != STEAM:  # May have been moved by previous iteration
+                continue
+
+            moved = False
+            rand = rand_vals[i]
+
+            if rand < rise_chance:
+                # Try to rise straight up
+                if g[y - 1, x] == AIR:
+                    g[y - 1, x] = STEAM
+                    g[y, x] = AIR
+                    moved = True
                 else:
-                    # Wind drift - move horizontally
-                    wind_dir = 1 if wind >= 0 else -1
-                    # Stronger wind = more consistent direction
-                    if np.random.random() < 0.5 + abs(wind) * 0.4:
-                        dx = wind_dir
-                    else:
-                        dx = -wind_dir
-
-                    nx = x + dx
-                    if 0 <= nx < w:
-                        if g[y, nx] == AIR:
-                            # Pure horizontal drift
-                            g[y, nx] = STEAM
-                            g[y, x] = AIR
-                            moved = True
-                        elif g[y - 1, nx] == AIR:
-                            # Diagonal up-wind
+                    # Try diagonal up (wind direction preferred)
+                    for dx in [wind_dir, -wind_dir]:
+                        nx = x + dx
+                        if 0 <= nx < w and g[y - 1, nx] == AIR:
                             g[y - 1, nx] = STEAM
                             g[y, x] = AIR
                             moved = True
+                            break
+            else:
+                # Wind drift - move horizontally
+                dx = wind_dir if drift_rand[i] < drift_bias else -wind_dir
+                nx = x + dx
+                if 0 <= nx < w:
+                    if g[y, nx] == AIR:
+                        g[y, nx] = STEAM
+                        g[y, x] = AIR
+                        moved = True
+                    elif y > 0 and g[y - 1, nx] == AIR:
+                        g[y - 1, nx] = STEAM
+                        g[y, x] = AIR
+                        moved = True
 
-                # Small chance to dissipate randomly
-                if not moved and np.random.random() < 0.01:
-                    g[y, x] = AIR
+            # Small chance to dissipate randomly
+            if not moved and dissipate_rand[i] < 0.01:
+                g[y, x] = AIR
 
-        # Steam at top row or edges disappears
-        g[0, :][g[0, :] == STEAM] = AIR
-        g[:, 0][g[:, 0] == STEAM] = AIR
-        g[:, w - 1][g[:, w - 1] == STEAM] = AIR
+        # Steam at top row or edges disappears (vectorized)
+        g[0, g[0, :] == STEAM] = AIR
+        g[g[:, 0] == STEAM, 0] = AIR
+        g[g[:, w - 1] == STEAM, w - 1] = AIR
 
     def _get_water_count(self) -> int:
         """Get cached water count, recalculating only if dirty."""
