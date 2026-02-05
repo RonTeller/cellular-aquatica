@@ -121,6 +121,17 @@ def main():
                     elif key == 'speed':
                         sim_steps = max(MIN_SIM_STEPS, min(MAX_SIM_STEPS,
                             int(sim_steps + delta)))
+                    elif key == 'wind':
+                        simulation.wind_speed = max(-1.0, min(1.0,
+                            simulation.wind_speed + delta))
+                    elif key == 'dry_thresh':
+                        # Convert percentage to decimal (UI shows %, simulation uses 0-1)
+                        new_pct = max(10, min(90, simulation.rain_threshold * 100 + delta))
+                        simulation.rain_threshold = new_pct / 100
+                    elif key == 'rain_thresh':
+                        # Convert percentage to decimal
+                        new_pct = max(5, min(50, simulation.dry_threshold * 100 + delta))
+                        simulation.dry_threshold = new_pct / 100
                 else:
                     # Normal mouse interaction
                     mouse_held = True
@@ -164,7 +175,10 @@ def main():
             death_chance=simulation.fish_death_chance,
             evap_rate=simulation.evaporation_rate,
             season=simulation.season,
-            water_ratio=simulation.get_water_ratio()
+            water_ratio=simulation.get_water_ratio(),
+            wind_speed=simulation.wind_speed,
+            dry_threshold=simulation.rain_threshold * 100,
+            rain_threshold=simulation.dry_threshold * 100
         )
 
         # Update display

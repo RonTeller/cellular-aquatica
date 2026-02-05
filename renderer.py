@@ -157,6 +157,9 @@ class Renderer:
         self.settings_panel.add_setting("Rain Intensity", "rain", 1, 0, 50, 1, ".0f")
         self.settings_panel.add_setting("Evaporation Rate", "evap", 0.01, 0.0, 0.1, 0.005, ".3f")
         self.settings_panel.add_setting("Sim Speed", "speed", 1, 1, 20, 1, ".0f")
+        self.settings_panel.add_setting("Wind Speed", "wind", 0.0, -1.0, 1.0, 0.1, ".1f")
+        self.settings_panel.add_setting("Dry Season %", "dry_thresh", 50, 10, 90, 5, ".0f")
+        self.settings_panel.add_setting("Rain Season %", "rain_thresh", 20, 5, 50, 5, ".0f")
 
     def handle_click(self, pos: tuple) -> tuple:
         """Handle mouse click for settings panel."""
@@ -225,7 +228,8 @@ class Renderer:
 
     def render_ui(self, fps: float, rain_intensity: int, paused: bool, sim_steps: int,
                   fish_count: int = 0, spawn_chance: float = 0.02, death_chance: float = 0.0005,
-                  evap_rate: float = 0.01, season: str = 'rain', water_ratio: float = 0.0) -> None:
+                  evap_rate: float = 0.01, season: str = 'rain', water_ratio: float = 0.0,
+                  wind_speed: float = 0.0, dry_threshold: float = 50, rain_threshold: float = 20) -> None:
         """
         Render UI overlay with stats and settings panel.
         """
@@ -282,6 +286,9 @@ class Renderer:
         self.settings_panel.update_value("rain", rain_intensity)
         self.settings_panel.update_value("evap", evap_rate)
         self.settings_panel.update_value("speed", sim_steps)
+        self.settings_panel.update_value("wind", wind_speed)
+        self.settings_panel.update_value("dry_thresh", dry_threshold)
+        self.settings_panel.update_value("rain_thresh", rain_threshold)
 
         # Render settings panel
         self.settings_panel.render(self.screen, fish_count)

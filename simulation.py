@@ -283,6 +283,10 @@ class Simulation:
         self.friction = 0.85
         self.rotation_damping = 0.92
 
+        # Wind system (affects steam movement)
+        # Positive = wind blowing right, negative = wind blowing left
+        self.wind_speed = 0.0  # Range: -1.0 to 1.0
+
     def update(self) -> None:
         """Perform one simulation step using checkerboard pattern."""
         self.frame += 1
@@ -302,6 +306,19 @@ class Simulation:
 
         # Update seasons and evaporation
         self._update_seasons()
+
+        # Gradually vary wind direction and speed
+        if self.frame % 60 == 0:  # Change wind every ~1 second
+            # Wind changes slowly, with occasional gusts
+            wind_change = np.random.uniform(-0.15, 0.15)
+            self.wind_speed = np.clip(self.wind_speed + wind_change, -1.0, 1.0)
+            # Small chance of calm or gust
+            if np.random.random() < 0.1:
+                self.wind_speed *= np.random.choice([0.0, 1.5])
+                self.wind_speed = np.clip(self.wind_speed, -1.0, 1.0)
+
+        # Update steam (rises and drifts with wind)
+        self._update_steam()
 
         # Shuffle random directions occasionally (every 4 frames) instead of regenerating
         if self.frame % 4 == 0:
@@ -1007,23 +1024,98 @@ class Simulation:
             self._evaporate_surface_water()
 
     def _evaporate_surface_water(self) -> None:
-        """Evaporate water from the surface (top-most water cells in each column)."""
+        """Evaporate water from the surface - creates steam that rises."""
         # Vectorized surface water detection
         water_mask = self.grid == Material.WATER
 
-        # Surface water: water with air above, or at top row
-        air_above = np.zeros_like(water_mask)
-        air_above[0, :] = True  # Top row is always "surface" if water
-        air_above[1:, :] = self.grid[:-1, :] == Material.AIR
+        # Surface water: water with air or steam above, or at top row
+        above_clear = np.zeros_like(water_mask)
+        above_clear[0, :] = True  # Top row is always "surface" if water
+        above_clear[1:, :] = (self.grid[:-1, :] == Material.AIR) | (self.grid[:-1, :] == Material.STEAM)
 
-        surface_water = water_mask & air_above
+        surface_water = water_mask & above_clear
 
-        # Apply random evaporation
+        # Apply random evaporation - turn water into steam
         evap_mask = surface_water & (np.random.random(self.grid.shape) < self.evaporation_rate)
         evap_count = np.sum(evap_mask)
         if evap_count > 0:
-            self.grid[evap_mask] = Material.AIR
+            self.grid[evap_mask] = Material.STEAM
             self._water_count -= evap_count
+
+    def _update_steam(self) -> None:
+        """Update steam particles - rise up and drift with wind."""
+        # Steam rises (lighter than air) and is affected by wind
+        # Process from top to bottom so steam can rise without conflicts
+        STEAM = int(Material.STEAM)
+        AIR = int(Material.AIR)
+
+        g = self.grid
+        h, w = self.height, self.width
+        wind = self.wind_speed
+
+        # Process each steam cell from top to bottom
+        for y in range(1, h):  # Start from row 1 (row 0 steam disappears)
+            for x in range(w):
+                if g[y, x] != STEAM:
+                    continue
+
+                # Determine movement based on wind
+                # Base behavior: rise up
+                # Wind adds horizontal drift tendency
+                rand = np.random.random()
+
+                # Calculate wind influence (stronger wind = more likely to drift)
+                wind_chance = abs(wind) * 0.7  # 0 to 0.7 chance based on wind strength
+                rise_chance = 0.8 - wind_chance * 0.3  # 0.5 to 0.8 chance to rise
+
+                moved = False
+
+                if rand < rise_chance:
+                    # Try to rise straight up
+                    if g[y - 1, x] == AIR:
+                        g[y - 1, x] = STEAM
+                        g[y, x] = AIR
+                        moved = True
+                    # If blocked, try diagonal up (wind direction preferred)
+                    elif not moved:
+                        wind_dir = 1 if wind >= 0 else -1
+                        for dx in [wind_dir, -wind_dir]:
+                            nx = x + dx
+                            if 0 <= nx < w and g[y - 1, nx] == AIR:
+                                g[y - 1, nx] = STEAM
+                                g[y, x] = AIR
+                                moved = True
+                                break
+                else:
+                    # Wind drift - move horizontally
+                    wind_dir = 1 if wind >= 0 else -1
+                    # Stronger wind = more consistent direction
+                    if np.random.random() < 0.5 + abs(wind) * 0.4:
+                        dx = wind_dir
+                    else:
+                        dx = -wind_dir
+
+                    nx = x + dx
+                    if 0 <= nx < w:
+                        if g[y, nx] == AIR:
+                            # Pure horizontal drift
+                            g[y, nx] = STEAM
+                            g[y, x] = AIR
+                            moved = True
+                        elif g[y - 1, nx] == AIR:
+                            # Diagonal up-wind
+                            g[y - 1, nx] = STEAM
+                            g[y, x] = AIR
+                            moved = True
+
+                # Small chance to dissipate randomly
+                if not moved and np.random.random() < 0.01:
+                    g[y, x] = AIR
+
+        # Steam at top row or edges disappears
+        g[0, :][g[0, :] == STEAM] = AIR
+        g[:, 0][g[:, 0] == STEAM] = AIR
+        g[:, w - 1][g[:, w - 1] == STEAM] = AIR
 
     def _get_water_count(self) -> int:
         """Get cached water count, recalculating only if dirty."""
