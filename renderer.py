@@ -152,6 +152,7 @@ class Renderer:
 
     def _init_settings_panel(self):
         """Initialize settings panel with default values."""
+        self.settings_panel.add_setting("Max Fish", "max_fish", 30, 1, 100, 5, ".0f")
         self.settings_panel.add_setting("Fish Spawn Rate", "spawn", 0.020, 0.0, 0.1, 0.005, ".3f")
         self.settings_panel.add_setting("Fish Death Rate", "death", 0.0001, 0.0, 0.01, 0.00005, ".5f")
         self.settings_panel.add_setting("Fish Eat Chance", "eat", 0.2, 0.0, 1.0, 0.05, ".2f")
@@ -237,10 +238,10 @@ class Renderer:
             self.screen.blit(self.sim_surface, (0, 0))
 
     def render_ui(self, fps: float, rain_intensity: int, paused: bool, sim_steps: int,
-                  fish_count: int = 0, spawn_chance: float = 0.02, death_chance: float = 0.0001,
-                  eat_chance: float = 0.2, evap_rate: float = 0.01, season: str = 'rain',
-                  water_ratio: float = 0.0, wind_speed: float = 0.0, dry_threshold: float = 50,
-                  rain_threshold: float = 20) -> None:
+                  fish_count: int = 0, max_fish: int = 30, spawn_chance: float = 0.02,
+                  death_chance: float = 0.0001, eat_chance: float = 0.2, evap_rate: float = 0.01,
+                  season: str = 'rain', water_ratio: float = 0.0, wind_speed: float = 0.0,
+                  dry_threshold: float = 50, rain_threshold: float = 20) -> None:
         """
         Render UI overlay with stats and settings panel.
         """
@@ -292,6 +293,7 @@ class Renderer:
             self.screen.blit(ctrl_text, (10, y_offset + 5 + i * 18))
 
         # Update settings panel values
+        self.settings_panel.update_value("max_fish", max_fish)
         self.settings_panel.update_value("spawn", spawn_chance)
         self.settings_panel.update_value("death", death_chance)
         self.settings_panel.update_value("eat", eat_chance)

@@ -106,7 +106,10 @@ def main():
 
                 if key is not None:
                     # Handle settings change
-                    if key == 'spawn':
+                    if key == 'max_fish':
+                        simulation.max_fish = max(1, min(100,
+                            int(simulation.max_fish + delta)))
+                    elif key == 'spawn':
                         simulation.fish_spawn_chance = max(0, min(0.1,
                             simulation.fish_spawn_chance + delta))
                     elif key == 'death':
@@ -174,6 +177,7 @@ def main():
         renderer.render_ui(
             fps, rain_intensity, paused, sim_steps,
             fish_count=len(simulation.fish),
+            max_fish=simulation.max_fish,
             spawn_chance=simulation.fish_spawn_chance,
             death_chance=simulation.fish_death_chance,
             eat_chance=simulation.fish_eat_chance,

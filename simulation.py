@@ -373,6 +373,7 @@ class Simulation:
         self.fish_spawn_chance = 0.02  # Base chance to spawn (multiplied by water ratio)
         self.fish_death_chance = 0.0001  # Base chance of death per frame (increases with size)
         self.fish_eat_chance = 0.2  # Chance that collision results in eating (vs just bouncing)
+        self.max_fish = 30  # Maximum number of fish allowed
         self.min_water_for_life = 50  # Minimum water cells needed for fish to spawn
 
         # Fish ID grid - tracks which fish owns each cell (-1 = no fish)
@@ -1007,9 +1008,10 @@ class Simulation:
         if water_count < self.min_water_for_life:
             return
 
-        # Limit fish population
-        max_fish = max(1, water_count // 80)  # 1 fish per 80 water cells max
-        if len(self.fish) >= max_fish:
+        # Limit fish population (use minimum of user setting and water-based limit)
+        water_based_max = max(1, water_count // 80)  # 1 fish per 80 water cells max
+        effective_max = min(self.max_fish, water_based_max)
+        if len(self.fish) >= effective_max:
             return
 
         # Spawn chance scales with water ratio (more water = more spawning)
